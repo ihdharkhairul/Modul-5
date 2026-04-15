@@ -8,24 +8,30 @@ $conn    = getConnection();
 $message = '';
 $msgType = 'success';
 
-// ── Helper upload foto ───────────────────────────────────────
+// ── Helper upload file ──────────────────────────────────────
 function uploadFoto(array $file): ?string {
     if ($file['error'] !== UPLOAD_ERR_OK) return null;
+
     $allowed   = ['image/jpeg','image/jpg','image/png','image/webp'];
-    $maxSize   = 2 * 1024 * 1024;
+    $maxSize   = 2 * 1024 * 1024; // 2 MB
     $uploadDir = __DIR__ . '/../uploads/';
+
     if (!in_array($file['type'], $allowed))  return null;
     if ($file['size'] > $maxSize)            return null;
     if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+
     $ext      = pathinfo($file['name'], PATHINFO_EXTENSION);
     $filename = uniqid('foto_', true) . '.' . strtolower($ext);
-    if (move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) return $filename;
+
+    if (move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) {
+        return $filename;
+    }
     return null;
 }
 
 $action = $_POST['action'] ?? '';
 
-// ── CREATE ───────────────────────────────────────────────────
+// ── CREATE ──────────────────────────────────────────────────
 if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $judul     = trim(filter_input(INPUT_POST, 'judul',    FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
     $kategori  = trim(filter_input(INPUT_POST, 'kategori', FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
@@ -40,47 +46,66 @@ if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (!in_array($kategori, $allowed_kat)) {
         $message = 'Kategori tidak valid.'; $msgType = 'error';
     } else {
+        // Upload foto jika ada
         if (!empty($_FILES['foto']['name'])) {
             $foto = uploadFoto($_FILES['foto']);
             if ($foto === null) {
-                $message = 'Gagal upload foto. Format JPG/PNG/WEBP, maks 2MB.';
+                $message = 'Gagal upload foto. Pastikan format JPG/PNG dan ukuran maks 2MB.';
                 $msgType = 'error';
             }
         }
+
         if (empty($message)) {
-            $stmt = $conn->prepare('INSERT INTO laporan_lingkungan (user_id,judul,kategori,deskripsi,lokasi,foto) VALUES (?,?,?,?,?,?)');
+            $stmt = $conn->prepare(
+                'INSERT INTO laporan_lingkungan (user_id, judul, kategori, deskripsi, lokasi, foto)
+                 VALUES (?,?,?,?,?,?)'
+            );
             $stmt->bind_param('isssss', $user['id'], $judul, $kategori, $deskripsi, $lokasi, $foto);
-            $message = $stmt->execute() ? 'Laporan berhasil disimpan!' : 'Gagal menyimpan laporan.';
-            if (!$stmt->execute()) $msgType = 'error';
+            if ($stmt->execute()) {
+                $message = 'Laporan berhasil disimpan!';
+            } else {
+                $message = 'Gagal menyimpan laporan.'; $msgType = 'error';
+            }
             $stmt->close();
         }
     }
 }
 
-// ── UPDATE ───────────────────────────────────────────────────
+// ── UPDATE ──────────────────────────────────────────────────
 if ($action === 'update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $id        = (int)($_POST['id'] ?? 0);
+    $id        = (int) ($_POST['id'] ?? 0);
     $judul     = trim(filter_input(INPUT_POST, 'judul',    FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
     $kategori  = trim(filter_input(INPUT_POST, 'kategori', FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
     $deskripsi = trim(filter_input(INPUT_POST, 'deskripsi',FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
     $lokasi    = trim(filter_input(INPUT_POST, 'lokasi',   FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
     $status    = trim(filter_input(INPUT_POST, 'status',   FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
     $foto_lama = trim(filter_input(INPUT_POST, 'foto_lama',FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
-    $foto      = $foto_lama;
 
+    $foto = $foto_lama; // default pakai foto lama
+
+    // Upload foto baru jika ada
     if (!empty($_FILES['foto']['name'])) {
         $foto_baru = uploadFoto($_FILES['foto']);
         if ($foto_baru) {
-            if ($foto_lama && file_exists(__DIR__.'/../uploads/'.$foto_lama)) unlink(__DIR__.'/../uploads/'.$foto_lama);
+            // Hapus foto lama
+            if ($foto_lama && file_exists(__DIR__ . '/../uploads/' . $foto_lama)) {
+                unlink(__DIR__ . '/../uploads/' . $foto_lama);
+            }
             $foto = $foto_baru;
         }
     }
 
     if ($user['role'] === 'citizen') {
-        $stmt = $conn->prepare('UPDATE laporan_lingkungan SET judul=?,kategori=?,deskripsi=?,lokasi=?,status=?,foto=? WHERE id=? AND user_id=?');
+        $stmt = $conn->prepare(
+            'UPDATE laporan_lingkungan SET judul=?,kategori=?,deskripsi=?,lokasi=?,status=?,foto=?
+             WHERE id=? AND user_id=?'
+        );
         $stmt->bind_param('ssssssii', $judul,$kategori,$deskripsi,$lokasi,$status,$foto,$id,$user['id']);
     } else {
-        $stmt = $conn->prepare('UPDATE laporan_lingkungan SET judul=?,kategori=?,deskripsi=?,lokasi=?,status=?,foto=? WHERE id=?');
+        $stmt = $conn->prepare(
+            'UPDATE laporan_lingkungan SET judul=?,kategori=?,deskripsi=?,lokasi=?,status=?,foto=?
+             WHERE id=?'
+        );
         $stmt->bind_param('ssssssi', $judul,$kategori,$deskripsi,$lokasi,$status,$foto,$id);
     }
     $stmt->execute();
@@ -88,50 +113,61 @@ if ($action === 'update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->close();
 }
 
-// ── DELETE ───────────────────────────────────────────────────
+// ── DELETE ──────────────────────────────────────────────────
 if ($action === 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $id = (int)($_POST['id'] ?? 0);
+    $id = (int) ($_POST['id'] ?? 0);
+
+    // Ambil nama foto dulu untuk dihapus
     $sf = $conn->prepare('SELECT foto FROM laporan_lingkungan WHERE id=?');
-    $sf->bind_param('i',$id); $sf->execute();
-    $rf = $sf->get_result()->fetch_assoc(); $sf->close();
+    $sf->bind_param('i', $id);
+    $sf->execute();
+    $row_foto = $sf->get_result()->fetch_assoc();
+    $sf->close();
 
     if ($user['role'] === 'citizen') {
         $stmt = $conn->prepare('DELETE FROM laporan_lingkungan WHERE id=? AND user_id=?');
-        $stmt->bind_param('ii',$id,$user['id']);
+        $stmt->bind_param('ii', $id, $user['id']);
     } else {
         $stmt = $conn->prepare('DELETE FROM laporan_lingkungan WHERE id=?');
-        $stmt->bind_param('i',$id);
+        $stmt->bind_param('i', $id);
     }
     if ($stmt->execute()) {
-        if (!empty($rf['foto'])) { $p = __DIR__.'/../uploads/'.$rf['foto']; if(file_exists($p)) unlink($p); }
+        // Hapus file foto jika ada
+        if (!empty($row_foto['foto'])) {
+            $path = __DIR__ . '/../uploads/' . $row_foto['foto'];
+            if (file_exists($path)) unlink($path);
+        }
         $message = 'Laporan berhasil dihapus.';
     }
     $stmt->close();
 }
 
-// ── FETCH DATA ────────────────────────────────────────────────
-$search    = trim(filter_input(INPUT_GET,'search',  FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
-$filterKat = trim(filter_input(INPUT_GET,'kategori',FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
+// ── FETCH DATA ───────────────────────────────────────────────
+$search    = trim(filter_input(INPUT_GET, 'search',   FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
+$filterKat = trim(filter_input(INPUT_GET, 'kategori', FILTER_SANITIZE_SPECIAL_CHARS) ?? '');
 
 if ($user['role'] === 'citizen') {
-    $sql = 'SELECT l.*,u.name AS pelapor FROM laporan_lingkungan l JOIN users u ON u.id=l.user_id WHERE l.user_id=?';
+    $sql    = 'SELECT l.*, u.name AS pelapor FROM laporan_lingkungan l JOIN users u ON u.id=l.user_id WHERE l.user_id=?';
     $params = [$user['id']]; $types = 'i';
 } else {
-    $sql = 'SELECT l.*,u.name AS pelapor FROM laporan_lingkungan l JOIN users u ON u.id=l.user_id WHERE 1=1';
+    $sql    = 'SELECT l.*, u.name AS pelapor FROM laporan_lingkungan l JOIN users u ON u.id=l.user_id WHERE 1=1';
     $params = []; $types = '';
 }
-if ($search)    { $like="%$search%"; $sql.=' AND (l.judul LIKE ? OR l.lokasi LIKE ?)'; $params=array_merge($params,[$like,$like]); $types.='ss'; }
-if ($filterKat) { $sql.=' AND l.kategori=?'; $params[]=$filterKat; $types.='s'; }
+
+if ($search)    { $sql .= ' AND (l.judul LIKE ? OR l.lokasi LIKE ?)'; $like = "%$search%"; $params = array_merge($params,[$like,$like]); $types .= 'ss'; }
+if ($filterKat) { $sql .= ' AND l.kategori=?'; $params[] = $filterKat; $types .= 's'; }
 $sql .= ' ORDER BY l.created_at DESC';
 
 $stmt = $conn->prepare($sql);
-if ($types) $stmt->bind_param($types,...$params);
+if ($types) $stmt->bind_param($types, ...$params);
 $stmt->execute();
 $laporan = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
 
+// Stats
 $wh    = ($user['role']==='citizen') ? " WHERE user_id={$user['id']}" : '';
-$stats = $conn->query("SELECT COUNT(*) total,SUM(status='Pending') pending,SUM(status='Diproses') diproses,SUM(status='Selesai') selesai FROM laporan_lingkungan$wh")->fetch_assoc();
+$stats = $conn->query("SELECT COUNT(*) total, SUM(status='Pending') pending, SUM(status='Diproses') diproses, SUM(status='Selesai') selesai FROM laporan_lingkungan$wh")->fetch_assoc();
+
 $conn->close();
 
 $kategoriList = ['Polusi Udara','Sampah Liar','Banjir','Kerusakan Pohon','Lainnya'];
@@ -147,7 +183,7 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-    * { font-family:'Inter',sans-serif; }
+    * { font-family: 'Inter', sans-serif; }
     .sidebar { width:260px; }
     @media(max-width:768px){ .sidebar{display:none;} }
     .modal-bg { background:rgba(0,0,0,.5); backdrop-filter:blur(4px); }
@@ -168,7 +204,8 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
       <span class="font-bold text-lg">GaiaCity</span>
     </div>
   </div>
-  <nav class="flex-1 p-4">
+
+  <nav class="flex-1 p-4 space-y-1">
     <a href="dashboard.php" class="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-teal-600/20 text-teal-400 font-medium text-sm">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -177,13 +214,14 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
       Dashboard
     </a>
   </nav>
+
   <div class="p-4 border-t border-gray-700">
     <div class="flex items-center gap-3 mb-3">
       <div class="w-9 h-9 bg-teal-600 rounded-full flex items-center justify-center text-sm font-bold">
         <?php echo strtoupper(substr($user['name'],0,1)); ?>
       </div>
       <div>
-        <div class="text-sm font-medium"><?php echo htmlspecialchars($user['name']); ?></div>
+        <div class="text-sm font-medium text-white"><?php echo htmlspecialchars($user['name']); ?></div>
         <div class="text-xs text-gray-400 capitalize"><?php echo $user['role']; ?></div>
       </div>
     </div>
@@ -199,10 +237,12 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
 
 <!-- MAIN -->
 <main class="flex-1 ml-0 md:ml-[260px] min-h-screen">
+
+  <!-- Topbar -->
   <header class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-20">
     <div>
       <h1 class="text-lg font-bold text-gray-900">Dashboard Laporan Lingkungan</h1>
-      <p class="text-xs text-gray-500"><?php echo date('l, d F Y'); ?> &bull; <span class="capitalize"><?php echo $user['role']; ?></span></p>
+      <p class="text-xs text-gray-500"><?php echo date('l, d F Y'); ?></p>
     </div>
     <button onclick="openModal('createModal')"
       class="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition shadow">
@@ -215,30 +255,39 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
 
   <div class="p-6 space-y-6">
 
+    <!-- Alert -->
     <?php if ($message): ?>
     <div class="flex items-center gap-3 px-5 py-3 rounded-xl text-sm font-medium
-      <?php echo $msgType==='error'?'bg-red-50 border border-red-200 text-red-700':'bg-green-50 border border-green-200 text-green-700'; ?>">
+      <?php echo $msgType==='error' ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-700'; ?>">
       <?php echo htmlspecialchars($message); ?>
     </div>
     <?php endif; ?>
 
     <!-- Stats -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <?php foreach([['Total',$stats['total'],'teal'],['Pending',$stats['pending'],'amber'],['Diproses',$stats['diproses'],'blue'],['Selesai',$stats['selesai'],'green']] as [$l,$v,$c]): ?>
+      <?php
+      $cards = [
+        ['label'=>'Total',    'val'=>$stats['total'],    'color'=>'teal'],
+        ['label'=>'Pending',  'val'=>$stats['pending'],  'color'=>'amber'],
+        ['label'=>'Diproses', 'val'=>$stats['diproses'], 'color'=>'blue'],
+        ['label'=>'Selesai',  'val'=>$stats['selesai'],  'color'=>'green'],
+      ];
+      foreach($cards as $c): ?>
       <div class="bg-white rounded-xl p-5 shadow-sm border border-gray-100 text-center">
-        <div class="text-2xl font-bold text-<?php echo $c; ?>-600"><?php echo $v??0; ?></div>
-        <div class="text-xs text-gray-500 mt-1"><?php echo $l; ?></div>
+        <div class="text-2xl font-bold text-<?php echo $c['color']; ?>-600"><?php echo $c['val']??0; ?></div>
+        <div class="text-xs text-gray-500 mt-1"><?php echo $c['label']; ?></div>
       </div>
       <?php endforeach; ?>
     </div>
 
-    <!-- Search -->
+    <!-- Search & Filter -->
     <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
       <form method="GET" class="flex flex-wrap gap-3">
         <input type="text" name="search" placeholder="Cari judul / lokasi..."
           value="<?php echo htmlspecialchars($search); ?>"
           class="flex-1 min-w-[160px] px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"/>
-        <select name="kategori" class="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
+        <select name="kategori"
+          class="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
           <option value="">Semua Kategori</option>
           <?php foreach($kategoriList as $k): ?>
           <option value="<?php echo $k; ?>" <?php echo $filterKat===$k?'selected':''; ?>><?php echo $k; ?></option>
@@ -253,9 +302,10 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
 
     <!-- Tabel -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
+      <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
         <h2 class="font-semibold text-gray-900">Daftar Laporan <span class="text-xs text-gray-400 font-normal">(<?php echo count($laporan); ?> data)</span></h2>
       </div>
+
       <?php if(empty($laporan)): ?>
       <div class="py-16 text-center text-gray-400">
         <p class="font-medium">Belum ada laporan</p>
@@ -271,21 +321,25 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
               <th class="px-4 py-3 text-left">Judul</th>
               <th class="px-4 py-3 text-left">Kategori</th>
               <th class="px-4 py-3 text-left">Lokasi</th>
-              <?php if($user['role']!=='citizen'): ?><th class="px-4 py-3 text-left">Pelapor</th><?php endif; ?>
+              <?php if($user['role']!=='citizen'): ?>
+              <th class="px-4 py-3 text-left">Pelapor</th>
+              <?php endif; ?>
               <th class="px-4 py-3 text-left">Status</th>
               <th class="px-4 py-3 text-left">Tanggal</th>
               <th class="px-4 py-3 text-center">Aksi</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
-            <?php foreach($laporan as $i => $row): $sc=$statusColor[$row['status']]??'gray'; ?>
+            <?php foreach($laporan as $i => $row): ?>
+            <?php $sc = $statusColor[$row['status']] ?? 'gray'; ?>
             <tr class="hover:bg-gray-50 transition">
               <td class="px-4 py-3 text-gray-400"><?php echo $i+1; ?></td>
               <td class="px-4 py-3">
                 <?php if($row['foto']): ?>
                 <img src="../uploads/<?php echo htmlspecialchars($row['foto']); ?>"
                   class="w-12 h-12 object-cover rounded-lg cursor-pointer border border-gray-200"
-                  onclick="showFoto('../uploads/<?php echo htmlspecialchars($row['foto']); ?>')" alt="foto"/>
+                  onclick="showFoto('../uploads/<?php echo htmlspecialchars($row['foto']); ?>')"
+                  alt="foto"/>
                 <?php else: ?>
                 <div class="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
                   <svg class="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -295,21 +349,29 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
                 </div>
                 <?php endif; ?>
               </td>
-              <td class="px-4 py-3 font-medium text-gray-900 max-w-[140px] truncate"><?php echo htmlspecialchars($row['judul']); ?></td>
-              <td class="px-4 py-3"><span class="px-2 py-1 bg-teal-50 text-teal-700 rounded-full text-xs"><?php echo htmlspecialchars($row['kategori']); ?></span></td>
-              <td class="px-4 py-3 text-gray-600 max-w-[120px] truncate"><?php echo htmlspecialchars($row['lokasi']); ?></td>
-              <?php if($user['role']!=='citizen'): ?><td class="px-4 py-3 text-gray-600"><?php echo htmlspecialchars($row['pelapor']); ?></td><?php endif; ?>
-              <td class="px-4 py-3"><span class="px-2 py-1 bg-<?php echo $sc; ?>-50 text-<?php echo $sc; ?>-700 rounded-full text-xs font-semibold"><?php echo $row['status']; ?></span></td>
-              <td class="px-4 py-3 text-gray-500 whitespace-nowrap"><?php echo date('d M Y',strtotime($row['created_at'])); ?></td>
+              <td class="px-4 py-3 font-medium text-gray-900 max-w-[150px] truncate"><?php echo htmlspecialchars($row['judul']); ?></td>
+              <td class="px-4 py-3">
+                <span class="px-2 py-1 bg-teal-50 text-teal-700 rounded-full text-xs"><?php echo htmlspecialchars($row['kategori']); ?></span>
+              </td>
+              <td class="px-4 py-3 text-gray-600 max-w-[130px] truncate"><?php echo htmlspecialchars($row['lokasi']); ?></td>
+              <?php if($user['role']!=='citizen'): ?>
+              <td class="px-4 py-3 text-gray-600"><?php echo htmlspecialchars($row['pelapor']); ?></td>
+              <?php endif; ?>
+              <td class="px-4 py-3">
+                <span class="px-2 py-1 bg-<?php echo $sc; ?>-50 text-<?php echo $sc; ?>-700 rounded-full text-xs font-semibold"><?php echo $row['status']; ?></span>
+              </td>
+              <td class="px-4 py-3 text-gray-500 whitespace-nowrap"><?php echo date('d M Y', strtotime($row['created_at'])); ?></td>
               <td class="px-4 py-3">
                 <div class="flex items-center justify-center gap-1">
-                  <button onclick='openEdit(<?php echo htmlspecialchars(json_encode($row),ENT_QUOTES); ?>)'
+                  <!-- Edit -->
+                  <button onclick='openEdit(<?php echo htmlspecialchars(json_encode($row), ENT_QUOTES); ?>)'
                     class="w-8 h-8 flex items-center justify-center rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition" title="Edit">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                     </svg>
                   </button>
+                  <!-- Delete -->
                   <form method="POST" onsubmit="return confirm('Hapus laporan ini?')">
                     <input type="hidden" name="action" value="delete"/>
                     <input type="hidden" name="id" value="<?php echo $row['id']; ?>"/>
@@ -338,39 +400,51 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
   <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between p-6 border-b sticky top-0 bg-white">
       <h3 class="font-bold text-gray-900 text-lg">Tambah Laporan Baru</h3>
-      <button onclick="closeModal('createModal')" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+      <button onclick="closeModal('createModal')" class="text-gray-400 hover:text-gray-600">✕</button>
     </div>
     <form method="POST" enctype="multipart/form-data" class="p-6 space-y-4">
       <input type="hidden" name="action" value="create"/>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Judul Laporan</label>
         <input name="judul" type="text" required placeholder="Judul laporan"
           class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"/>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Kategori</label>
-        <select name="kategori" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
-          <?php foreach($kategoriList as $k): ?><option value="<?php echo $k; ?>"><?php echo $k; ?></option><?php endforeach; ?>
+        <select name="kategori"
+          class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
+          <?php foreach($kategoriList as $k): ?>
+          <option value="<?php echo $k; ?>"><?php echo $k; ?></option>
+          <?php endforeach; ?>
         </select>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Lokasi</label>
         <input name="lokasi" type="text" required placeholder="Alamat / lokasi kejadian"
           class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"/>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Deskripsi</label>
         <textarea name="deskripsi" rows="3" required placeholder="Jelaskan masalah lingkungan..."
           class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none"></textarea>
       </div>
+
+      <!-- Upload Foto -->
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1.5">Foto <span class="text-gray-400 font-normal">(opsional, maks 2MB)</span></label>
+        <label class="block text-sm font-medium text-gray-700 mb-1.5">
+          Foto Laporan <span class="text-gray-400 font-normal">(opsional, maks 2MB)</span>
+        </label>
         <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-teal-400 transition cursor-pointer"
           onclick="document.getElementById('fotoCreate').click()">
-          <input id="fotoCreate" name="foto" type="file" accept="image/*" class="hidden" onchange="previewFoto(this,'prevCreate','lblCreate')"/>
+          <input id="fotoCreate" name="foto" type="file" accept="image/*" class="hidden"
+            onchange="previewFoto(this,'prevCreate')"/>
           <img id="prevCreate" src="#" alt="preview" class="hidden mx-auto mb-2 max-h-32 rounded-lg object-cover"/>
-          <div id="lblCreate">
-            <svg class="w-8 h-8 text-gray-300 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div id="fotoCreateLabel">
+            <svg class="w-8 h-8 text-gray-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                 d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
             </svg>
@@ -379,11 +453,17 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
           </div>
         </div>
       </div>
+
+      <!-- Tombol Simpan (sekaligus CRUD + Upload) -->
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal('createModal')"
-          class="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition">Batal</button>
+          class="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition">
+          Batal
+        </button>
         <button type="submit"
-          class="flex-1 py-2.5 bg-teal-600 text-white rounded-lg text-sm font-semibold hover:bg-teal-700 transition">Simpan</button>
+          class="flex-1 py-2.5 bg-teal-600 text-white rounded-lg text-sm font-semibold hover:bg-teal-700 transition">
+          Simpan
+        </button>
       </div>
     </form>
   </div>
@@ -394,63 +474,85 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
   <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between p-6 border-b sticky top-0 bg-white">
       <h3 class="font-bold text-gray-900 text-lg">Edit Laporan</h3>
-      <button onclick="closeModal('editModal')" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+      <button onclick="closeModal('editModal')" class="text-gray-400 hover:text-gray-600">✕</button>
     </div>
     <form method="POST" enctype="multipart/form-data" class="p-6 space-y-4">
       <input type="hidden" name="action" value="update"/>
       <input type="hidden" name="id" id="edit_id"/>
       <input type="hidden" name="foto_lama" id="edit_foto_lama"/>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Judul Laporan</label>
         <input name="judul" id="edit_judul" type="text" required
           class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"/>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Kategori</label>
-        <select name="kategori" id="edit_kategori" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
-          <?php foreach($kategoriList as $k): ?><option value="<?php echo $k; ?>"><?php echo $k; ?></option><?php endforeach; ?>
+        <select name="kategori" id="edit_kategori"
+          class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
+          <?php foreach($kategoriList as $k): ?>
+          <option value="<?php echo $k; ?>"><?php echo $k; ?></option>
+          <?php endforeach; ?>
         </select>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Lokasi</label>
         <input name="lokasi" id="edit_lokasi" type="text" required
           class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"/>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Deskripsi</label>
         <textarea name="deskripsi" id="edit_deskripsi" rows="3" required
           class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none"></textarea>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1.5">Status</label>
-        <select name="status" id="edit_status" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
-          <?php foreach($statusList as $s): ?><option value="<?php echo $s; ?>"><?php echo $s; ?></option><?php endforeach; ?>
+        <select name="status" id="edit_status"
+          class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
+          <?php foreach($statusList as $s): ?>
+          <option value="<?php echo $s; ?>"><?php echo $s; ?></option>
+          <?php endforeach; ?>
         </select>
       </div>
+
+      <!-- Upload Foto Edit -->
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1.5">Ganti Foto <span class="text-gray-400 font-normal">(kosongkan jika tidak diganti)</span></label>
-        <div id="fotoEditCurrentWrap" class="mb-2 hidden">
-          <img id="fotoEditCurrentImg" src="#" alt="foto saat ini" class="max-h-28 rounded-lg object-cover border border-gray-200"/>
+        <label class="block text-sm font-medium text-gray-700 mb-1.5">
+          Ganti Foto <span class="text-gray-400 font-normal">(kosongkan jika tidak diganti)</span>
+        </label>
+        <div id="fotoEditPreviewWrap" class="mb-2 hidden">
+          <img id="fotoEditCurrent" src="#" alt="foto saat ini"
+            class="max-h-28 rounded-lg object-cover border border-gray-200"/>
           <p class="text-xs text-gray-400 mt-1">Foto saat ini</p>
         </div>
         <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-teal-400 transition cursor-pointer"
           onclick="document.getElementById('fotoEdit').click()">
-          <input id="fotoEdit" name="foto" type="file" accept="image/*" class="hidden" onchange="previewFoto(this,'prevEdit',null)"/>
+          <input id="fotoEdit" name="foto" type="file" accept="image/*" class="hidden"
+            onchange="previewFoto(this,'prevEdit')"/>
           <img id="prevEdit" src="#" alt="preview baru" class="hidden mx-auto mb-2 max-h-28 rounded-lg object-cover"/>
           <p class="text-sm text-gray-400">Klik untuk ganti foto</p>
         </div>
       </div>
+
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal('editModal')"
-          class="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition">Batal</button>
+          class="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition">
+          Batal
+        </button>
         <button type="submit"
-          class="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition">Simpan</button>
+          class="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition">
+          Simpan
+        </button>
       </div>
     </form>
   </div>
 </div>
 
-<!-- MODAL FOTO BESAR -->
+<!-- MODAL FOTO PREVIEW -->
 <div id="fotoModal" class="hidden fixed inset-0 modal-bg z-50 flex items-center justify-center p-4">
   <div class="relative">
     <button onclick="closeModal('fotoModal')"
@@ -462,6 +564,7 @@ $statusColor  = ['Pending'=>'amber','Diproses'=>'blue','Selesai'=>'green'];
 <script>
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); document.body.style.overflow='hidden'; }
 function closeModal(id) { document.getElementById(id).classList.add('hidden');    document.body.style.overflow=''; }
+
 ['createModal','editModal','fotoModal'].forEach(id => {
   document.getElementById(id).addEventListener('click', function(e){ if(e.target===this) closeModal(id); });
 });
@@ -472,27 +575,43 @@ function openEdit(row) {
   document.getElementById('edit_lokasi').value    = row.lokasi;
   document.getElementById('edit_deskripsi').value = row.deskripsi;
   document.getElementById('edit_foto_lama').value = row.foto || '';
+
+  // Set select
   ['edit_kategori','edit_status'].forEach(sid => {
     const sel = document.getElementById(sid);
     const key = sid.replace('edit_','');
     for(let o of sel.options) o.selected = (o.value === row[key]);
   });
-  const wrap = document.getElementById('fotoEditCurrentWrap');
-  const img  = document.getElementById('fotoEditCurrentImg');
-  if (row.foto) { img.src='../uploads/'+row.foto; wrap.classList.remove('hidden'); }
-  else wrap.classList.add('hidden');
+
+  // Tampilkan foto lama jika ada
+  const wrap = document.getElementById('fotoEditPreviewWrap');
+  const img  = document.getElementById('fotoEditCurrent');
+  if (row.foto) {
+    img.src = '../uploads/' + row.foto;
+    wrap.classList.remove('hidden');
+  } else {
+    wrap.classList.add('hidden');
+  }
+
+  // Reset preview baru
   document.getElementById('prevEdit').classList.add('hidden');
   document.getElementById('fotoEdit').value = '';
+
   openModal('editModal');
 }
 
-function previewFoto(input, previewId, labelId) {
+function previewFoto(input, previewId) {
   const preview = document.getElementById(previewId);
   if (input.files && input.files[0]) {
     const reader = new FileReader();
-    reader.onload = e => { preview.src = e.target.result; preview.classList.remove('hidden'); };
+    reader.onload = e => {
+      preview.src = e.target.result;
+      preview.classList.remove('hidden');
+    };
     reader.readAsDataURL(input.files[0]);
-    if (labelId) document.getElementById(labelId).classList.add('hidden');
+    // Sembunyikan label drop zone
+    const label = document.getElementById('fotoCreateLabel');
+    if (label) label.classList.add('hidden');
   }
 }
 
